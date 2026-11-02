@@ -112,10 +112,7 @@ import { LiveHub, TicketStore, createLiveHandler } from "@hum/server";
 
 const queries = {
   "users.all": {
-    build: () => ({
-      sql: "select id, name, org_id from users order by id desc limit 50",
-      params: [],
-    }),
+    tables: ["users"],
   },
   "users.byOrg": {
     params: (raw) => {
@@ -123,12 +120,8 @@ const queries = {
       if (!Number.isInteger(orgId)) throw new Error("org_id");
       return { org_id: orgId };
     },
-    // Tables are inferred from EXPLAIN QUERY PLAN. Swap `build` for
-    // `tables: ["users"]` and no SQL is compiled at all.
-    build: (ctx, params) => ({
-      sql: "select id, name, org_id from users where org_id = ? order by id desc",
-      params: [params.org_id],
-    }),
+    // The tables this query reads. A write to any of them invalidates it.
+    tables: ["users"],
     authorize: (ctx) => ctx.userId != null,
   },
 };
@@ -227,22 +220,19 @@ latency one: the poll still finds the change.
 
 ## Drizzle
 
-Drizzle emits plain SQL, so capture needs no integration. The helper in
-`@hum/core` exists to keep types and dependency inference convenient:
+Drizzle emits plain SQL, so capture needs no integration and there is no
+adapter to install. Declare the tables your query reads:
 
 ```ts
-import { eq } from "drizzle-orm";
-import { defineDrizzleQuery } from "@hum/core";
-
 const queries = {
-  "users.byOrg": defineDrizzleQuery({
-    build: (ctx) => db.select().from(users).where(eq(users.orgId, ctx.orgId)),
-  }),
+  "users.byOrg": {
+    params: (raw) => ({ org_id: Number(raw.org_id) }),
+    tables: ["users"],
+  },
 };
 ```
 
-`defineDrizzleQuery` compiles with `.toSQL()`. The SQL is used for dependency
-inference and the params become part of the subscription key.
+The params become part of the subscription key; the SQL stays in your route.
 
 > **After every `drizzle-kit push`:** tables are recreated, which drops their
 > triggers. Call `syncLive({ db })` at boot (or in a `predev`/`predeploy`
@@ -250,40 +240,35 @@ inference and the params become part of the subscription key.
 
 ## Query definitions
 
-A query is a name, an optional param parser, and **either** a builder **or** a
-list of tables.
+A query is a name, an optional param parser, and the tables it reads. That's
+the whole shape:
 
 ```ts
 interface QueryDef<P = any> {
-  params?: (raw: unknown) => P;                                  // throw to reject (400)
-  build?: (ctx: Ctx, params: P) => { sql: string; params?: unknown[] } | { toSQL(): … };
-  tables?: string[] | ((ctx: Ctx, params: P) => string[]);
+  params?: (raw: unknown) => P;                            // throw to reject (400)
+  tables: string[] | ((ctx: Ctx, params: P) => string[]);  // required
   authorize?: (ctx: Ctx, params: P) => boolean | Promise<boolean>;
 }
 ```
 
-**One of `build` or `tables` is required**, and `tables` wins: with it, no SQL
-is compiled and `build` is never called. That is the "I already know what this
-reads" mode:
-
 ```ts
-"users.all": { tables: ["users"] }
+"users.all":   { tables: ["users"] },
+"messages.byRoom": {
+  params: (raw) => ({ room_id: Number(raw.room_id) }),
+  tables: ["messages", "users"],
+}
 ```
 
-`build` is not a data path either. The hub compiles it and passes it to
-`EXPLAIN QUERY PLAN` to work out dependencies — it never executes it. Your
-route still fetches the rows, and can run the same definition so the SQL exists
-once:
+A write to any listed table invalidates every subscription to that query, and
+that is the only dependency mechanism — no SQL, no parser, no inference, no
+fallback. `LiveHub` throws at construction if `tables` is missing, so a broken
+registry fails at boot instead of never waking up.
+
+Use the function form when dependencies vary by request:
 
 ```ts
-const def = queries["users.byOrg"];
-const params = def.params?.(raw);
-const { sql, params: values } = def.build!(ctx, params);
-db.prepare(sql).all(...values);
+tables: (ctx, params) => ["messages", params.with_authors ? "users" : null].filter(Boolean)
 ```
-
-`LiveHub` throws at construction if a query has neither, so a broken registry
-fails at boot instead of returning a mysterious 403 on first subscribe.
 
 ## API surface
 
@@ -295,9 +280,7 @@ fails at boot instead of returning a mysterious 403 on first subscribe.
 | `checkTriggers(db, { include?, exclude? })` | `{ missing, orphaned }` for boot-time drift detection. Pass the same filters you gave `syncLive`. |
 | `Tailer` | Cursor over `_live_changes`; emits coalesced `{ from, to, tables, count }`. |
 | `compact({ db, minCursor?, keep? })` | Prune the outbox and record `truncated_through`. |
-| `tablesForSql(db, sql, params, known?)` | Planner-derived table dependencies. |
 | `onWrite(db, notify)` | Proxy that calls `notify` after `run()`/`exec()`. Pair with `hub.flush()`. |
-| `defineDrizzleQuery({ build?, tables?, params?, authorize? })` | Drizzle builder → query definition (one of `build`/`tables` required). Also `compileDrizzle`, `drizzleTables`, `defineRegistry`. |
 | `currentSeq(db)`, `stableStringify(value)` | Small helpers. |
 
 `capture` controls what a trigger writes: `"row"` (default) stores the primary
@@ -369,7 +352,7 @@ were created and never opened a stream.
 ## Project layout
 
 ```
-packages/core     outbox, triggers, tailer, retention, deps, write + drizzle
+packages/core     outbox, triggers, tailer, retention, write helper
 packages/server   hub, subscriptions, SSE, tickets, node adapter
 packages/react    LiveClient + useLiveQuery
 examples/demo     runnable end-to-end app

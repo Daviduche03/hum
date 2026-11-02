@@ -41,7 +41,7 @@ test("delivers a change for a subscribed table", async () => {
   }
 });
 
-test("infers dependencies for a query with no explicit tables list", async () => {
+test("reports the tables declared by the query", async () => {
   const h = await start();
   try {
     const { connId, ticket } = await connect(h.base);
@@ -49,18 +49,15 @@ test("infers dependencies for a query with no explicit tables list", async () =>
     const events = sseReader(stream);
     await events.next("hello");
 
-    // users.byId declares tables explicitly; users.all relies on inference.
-    assert.equal((await subscribe(h.base, connId, "q1", "users.byId", { id: 1 })).status, 200);
-
-    const inferred = await subscribe(h.base, connId, "q2", "users.all");
-    const body = (await inferred.json()) as { tables: string[] };
-    assert.deepEqual(body.tables, ["users"]);
+    const sub = await subscribe(h.base, connId, "q1", "users.byId", { id: 1 });
+    assert.equal(sub.status, 200);
+    assert.deepEqual(((await sub.json()) as { tables: string[] }).tables, ["users"]);
 
     h.db.prepare("INSERT INTO users (id, name) VALUES (?, ?)").run(1, "ada");
     h.hub.flush();
 
     const change = await events.next("change");
-    assert.deepEqual(change.ids.sort(), ["q1", "q2"]);
+    assert.deepEqual(change.ids, ["q1"]);
     events.cancel();
   } finally {
     await h.close();
@@ -134,11 +131,11 @@ test("malformed params are rejected without revealing the query", async () => {
   }
 });
 
-test("a query that declares tables needs no SQL at all", async () => {
+test("a query is just a name and its tables", async () => {
   const h = await start();
   try {
     const { connId } = await connect(h.base);
-    const response = await subscribe(h.base, connId, "q1", "users.tablesOnly");
+    const response = await subscribe(h.base, connId, "q1", "users.all");
     assert.equal(response.status, 200);
 
     const body = (await response.json()) as { tables: string[] };
@@ -148,7 +145,7 @@ test("a query that declares tables needs no SQL at all", async () => {
   }
 });
 
-test("a query with neither build nor tables fails at construction", async () => {
+test("a query with no tables fails at construction", async () => {
   const h = await start();
   try {
     assert.throws(
@@ -157,7 +154,7 @@ test("a query with neither build nor tables fails at construction", async () => 
           db: h.db,
           queries: { broken: {} as never },
         }),
-      /needs either/,
+      /needs `tables`/,
     );
   } finally {
     await h.close();

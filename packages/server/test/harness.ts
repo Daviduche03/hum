@@ -45,31 +45,19 @@ export async function start(options: HarnessOptions = {}): Promise<Harness> {
   syncLive({ db });
 
   const queries: QueryRegistry = {
-    "users.all": {
-      build: () => ({
-        sql: "SELECT id, name FROM users ORDER BY id",
-        params: [],
-      }),
-    },
+    "users.all": { tables: ["users"] },
     "users.byId": {
       params: (raw: any) => {
         const id = Number(raw?.id);
         if (!Number.isInteger(id)) throw new Error("id");
         return { id };
       },
-      build: (_ctx, params: any) => ({
-        sql: "SELECT id, name FROM users WHERE id = ?",
-        params: [params.id],
-      }),
-      tables: ["users"],
+      // Function form: dependencies can depend on the params or the identity.
+      tables: (_ctx, params: any) => (params.id > 0 ? ["users"] : []),
     },
     "secret.only": {
-      build: () => ({ sql: "SELECT 1 AS ok", params: [] }),
       tables: ["users"],
       authorize: (ctx) => ctx.role !== "guest",
-    },
-    "users.tablesOnly": {
-      tables: ["users"],
     },
   };
 

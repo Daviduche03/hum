@@ -61,6 +61,14 @@ const ROOMS_SQL = `SELECT r.id, r.name,
 const roomsFor = db.prepare(ROOMS_SQL);
 const userByName = db.prepare("SELECT id, name FROM users WHERE name = ?");
 
+const LATEST_SQL = `SELECT m.id, m.room_id, m.body, m.created_at, m.author_id, u.name AS author
+   FROM messages m JOIN users u ON u.id = m.author_id
+   WHERE m.room_id = ?`;
+const latestMessages = db.prepare(`${LATEST_SQL} ORDER BY m.id DESC LIMIT 50`);
+const olderMessages = db.prepare(
+  `${LATEST_SQL} AND m.id < ? ORDER BY m.id DESC LIMIT 30`,
+);
+
 if (Number(db.prepare("SELECT COUNT(*) AS c FROM users").get().c) === 0) {
   const addUser = db.prepare("INSERT INTO users (name) VALUES (?)");
   for (const name of SEED_USERS) addUser.run(name);
@@ -111,12 +119,9 @@ function identify(source) {
 /**
  * The allowlist. Clients send a name + params, never SQL.
  *
- * Two shapes are shown on purpose:
- * - `rooms.forUser` declares `tables`, so no SQL is compiled at all. The room
- *   list is read by its own route below.
- * - `messages.latest` provides `build`, so the hub asks `EXPLAIN QUERY PLAN`
- *   for dependencies. The same definition is executed by the read route, so
- *   that SQL exists once.
+ * `tables` is the whole dependency model: a write to any of them invalidates
+ * every subscription to that query. The SQL lives in the routes below, where
+ * it runs.
  */
 const queries = {
   "rooms.forUser": {
@@ -128,24 +133,11 @@ const queries = {
       if (!Number.isInteger(roomId)) throw new Error("room_id required");
       return { room_id: roomId };
     },
-    build: (_ctx, params) => ({
-      sql: `SELECT m.id, m.room_id, m.body, m.created_at, m.author_id, u.name AS author
-            FROM messages m JOIN users u ON u.id = m.author_id
-            WHERE m.room_id = ?
-            ORDER BY m.id DESC
-            LIMIT 50`,
-      params: [params.room_id],
-    }),
+    // The unread count and the author join both live in the route's SQL; this
+    // is the list of tables a write has to touch to invalidate the view.
+    tables: ["messages", "users"],
   },
 };
-
-/** Execute a registry entry: the live definition is also the read path. */
-function runQuery(name, rawParams) {
-  const def = queries[name];
-  const params = def.params ? def.params(rawParams) : rawParams;
-  const compiled = def.build({}, params);
-  return db.prepare(compiled.sql).all(...compiled.params);
-}
 
 const hub = new LiveHub({
   db,
@@ -225,15 +217,8 @@ const server = http.createServer(async (request, response) => {
     const before = Number(url.searchParams.get("before"));
     const rows =
       Number.isInteger(before) && before > 0
-        ? db
-            .prepare(
-              `SELECT m.id, m.room_id, m.body, m.created_at, m.author_id, u.name AS author
-               FROM messages m JOIN users u ON u.id = m.author_id
-               WHERE m.room_id = ? AND m.id < ?
-               ORDER BY m.id DESC LIMIT 30`,
-            )
-            .all(roomId, before)
-        : runQuery("messages.latest", { room_id: roomId });
+        ? olderMessages.all(roomId, before)
+        : latestMessages.all(roomId);
     return json(response, { rows: rows.map((row) => ({ ...row })) });
   }
 

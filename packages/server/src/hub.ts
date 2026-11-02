@@ -1,9 +1,7 @@
 import {
   compact,
   currentSeq,
-  knownTables,
   stableStringify,
-  tablesForSql,
   Tailer,
   type ChangeBatch,
   type LiveDb,
@@ -12,7 +10,6 @@ import { Connection } from "./connection.ts";
 import {
   deny,
   LiveHubError,
-  resolveSql,
   type Ctx,
   type QueryDef,
   type QueryRegistry,
@@ -81,7 +78,6 @@ export class LiveHub {
   private readonly subs = new Map<string, Subscription>();
   private readonly byTable = new Map<string, Set<Subscription>>();
   private readonly localIndex = new Map<string, Subscription>();
-  private known: Set<string>;
   private compactTimer: ReturnType<typeof setInterval> | null = null;
 
   constructor(options: HubOptions) {
@@ -95,15 +91,15 @@ export class LiveHub {
     this.identityOf =
       options.identity ??
       ((ctx) => String(ctx.userId ?? ctx.sessionId ?? ctx.orgId ?? ""));
-    this.known = knownTables(this.db);
 
-    // Fail at boot, not on the first subscription: a query with neither a
-    // builder nor declared tables can never resolve to dependencies.
+    // Fail at boot, not on the first subscription: a query without tables can
+    // never be invalidated, and silently never waking up is the worst failure
+    // this library can have.
     for (const [name, def] of Object.entries(this.queries)) {
-      if (!def.build && !def.tables) {
+      if (def.tables === undefined) {
         throw new LiveHubError(
           "E_CONFIG",
-          `query "${name}" needs either \`build\` or \`tables\``,
+          `query "${name}" needs \`tables\``,
           500,
         );
       }
@@ -142,11 +138,6 @@ export class LiveHub {
     this.subs.clear();
     this.byTable.clear();
     this.localIndex.clear();
-  }
-
-  /** Re-read the table list after a migration. */
-  refreshTables(): void {
-    this.known = knownTables(this.db);
   }
 
   /** Read the outbox once, right now. Call after in-process writes. */
@@ -285,21 +276,27 @@ export class LiveHub {
     ctx: Ctx,
     params: unknown,
   ): string[] {
-    if (typeof def.tables === "function") return def.tables(ctx, params);
-    if (Array.isArray(def.tables)) return def.tables;
+    if (typeof def.tables === "function") {
+      const tables = def.tables(ctx, params);
+      if (!Array.isArray(tables)) {
+        throw new LiveHubError(
+          "E_CONFIG",
+          `query "${name}" must return an array of tables`,
+          500,
+        );
+      }
+      return tables;
+    }
 
-    if (!def.build) {
+    if (!Array.isArray(def.tables)) {
       throw new LiveHubError(
         "E_CONFIG",
-        `query "${name}" needs either \`build\` or \`tables\``,
+        `query "${name}" needs \`tables\``,
         500,
       );
     }
 
-    const sql = resolveSql(def.build(ctx, params));
-    const inferred = tablesForSql(this.db, sql.sql, sql.params, this.known);
-    // Falling back to every table is pessimistic but never silently stale.
-    return inferred.length > 0 ? inferred : [...this.known];
+    return def.tables;
   }
 
   private localIds(connId: string): string[] {

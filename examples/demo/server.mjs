@@ -43,15 +43,12 @@ if (Number(db.prepare("SELECT COUNT(*) AS c FROM users").get().c) === 0) {
 /**
  * The allowlist. Clients send a name + params, never SQL.
  *
- * `users.all` and `users.byOrg` deliberately omit `tables`, so the server
- * derives dependencies with EXPLAIN QUERY PLAN.
+ * `tables` is the whole dependency model: a write to any of them invalidates
+ * every subscription to this query. The SQL itself lives in the route below.
  */
 const queries = {
   "users.all": {
-    build: () => ({
-      sql: "SELECT id, name, org_id, created_at FROM users ORDER BY id DESC LIMIT 50",
-      params: [],
-    }),
+    tables: ["users"],
   },
   "users.byOrg": {
     params: (raw) => {
@@ -59,10 +56,7 @@ const queries = {
       if (!Number.isInteger(orgId)) throw new Error("org_id required");
       return { org_id: orgId };
     },
-    build: (_ctx, params) => ({
-      sql: "SELECT id, name, org_id, created_at FROM users WHERE org_id = ? ORDER BY id DESC LIMIT 50",
-      params: [params.org_id],
-    }),
+    tables: ["users"],
   },
 };
 

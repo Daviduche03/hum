@@ -8,14 +8,9 @@ import { test } from "node:test";
 import {
   checkTriggers,
   compact,
-  compileDrizzle,
   currentSeq,
-  defineDrizzleQuery,
-  defineRegistry,
-  drizzleTables,
   onWrite,
   syncLive,
-  tablesForSql,
   Tailer,
   type ChangeBatch,
 } from "../src/index.ts";
@@ -231,20 +226,6 @@ test("retention truncates and the tailer asks for a resync", () => {
   }
 });
 
-test("derives table dependencies from EXPLAIN QUERY PLAN", () => {
-  const h = openDb();
-  try {
-    const sql = `SELECT u.name, p.title FROM users u JOIN posts p ON p.user_id = u.id WHERE u.org_id = ?`;
-    const tables = tablesForSql(h.db, sql, [1], new Set(["users", "posts"]));
-    assert.deepEqual(tables.sort(), ["posts", "users"]);
-
-    const single = tablesForSql(h.db, "SELECT * FROM users WHERE id = ?", [1], new Set(["users", "posts"]));
-    assert.deepEqual(single, ["users"]);
-  } finally {
-    h.close();
-  }
-});
-
 test("syncLive does not rewrite triggers that already match", () => {
   const h = openDb();
   try {
@@ -354,41 +335,6 @@ test("an outbox created with a NOT NULL pk is migrated in place", () => {
     // Table-level capture can now write NULL.
     h.db.prepare("INSERT INTO users (id, org_id, name) VALUES (?, ?, ?)").run(1, 1, "a");
     assert.equal(outbox(h.db).at(-1)!.pk, null);
-  } finally {
-    h.close();
-  }
-});
-
-test("defineDrizzleQuery compiles SQL and resolves real table dependencies", () => {
-  const h = openDb();
-  try {
-    const query = defineDrizzleQuery({
-      build: (ctx) => ({
-        toSQL: () => ({
-          sql: "SELECT u.name FROM users u JOIN posts p ON p.user_id = u.id WHERE u.org_id = ?",
-          params: [ctx.orgId],
-        }),
-      }),
-    });
-
-    const built = query.build({ orgId: 7 }, undefined);
-    assert.deepEqual(compileDrizzle(built), {
-      sql: "SELECT u.name FROM users u JOIN posts p ON p.user_id = u.id WHERE u.org_id = ?",
-      params: [7],
-    });
-
-    // Planner prints aliases ("u", "p"); the helper must return real tables.
-    assert.deepEqual(drizzleTables(h.db, built).sort(), ["posts", "users"]);
-
-    const registry = defineRegistry({ "users.byOrg": query });
-    assert.deepEqual(Object.keys(registry), ["users.byOrg"]);
-
-    // `tables` alone is a complete definition.
-    const tablesOnly = defineDrizzleQuery({ tables: ["users"] });
-    assert.deepEqual(tablesOnly, { tables: ["users"] });
-
-    // Types already reject this; the runtime guard catches untyped callers.
-    assert.throws(() => defineDrizzleQuery({} as never), /build.*tables/);
   } finally {
     h.close();
   }

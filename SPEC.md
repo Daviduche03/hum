@@ -95,20 +95,29 @@ key = scope(ctx) + "\0" + name + "\0" + stableStringify(params)
 - `byTable` is a reverse index (`table → subscriptions`) so fan-out is
   proportional to affected subscriptions, not to total subscriptions.
 
-### Dependency discovery
+### Dependencies
 
-`EXPLAIN QUERY PLAN` is the source of truth, because the planner already knows
-which tables a query touches. Two wrinkles:
+Declared, not inferred. `tables` is the whole dependency model:
 
-- The planner prints **aliases** (`SCAN u`), so FROM/JOIN clauses are scanned
-  for real table names and filtered against `sqlite_master`.
-- If nothing is inferred, we fall back to **all tables**. That is noisy but
-  correct; a silent no-notification subscription is not.
+```ts
+"users.byOrg": {
+  params: (raw) => ({ org_id: Number(raw.org_id) }),
+  tables: ["users"],
+}
+```
 
-`QueryDef.tables` overrides inference when you want precision (views, virtual
-tables, CTEs that the heuristic misses). **`tables` alone is a complete
-definition** — with it the hub never compiles SQL. `build` exists only so the
-planner can infer; it is never executed by the server.
+A write to any listed table invalidates every subscription to that query. A
+function is evaluated per subscription, so dependencies can depend on params or
+identity:
+
+```ts
+tables: (ctx, params) => ["messages", params.include_authors && "users"].filter(Boolean)
+```
+
+There is no SQL in the registry and nothing to keep in sync with a query
+planner. The trade-off is explicit: forget a table and the query will not wake
+up. `LiveHub` refuses a query with no `tables` at construction, so the missing
+field fails at boot; a wrong list is yours to catch.
 
 ## Transport
 
