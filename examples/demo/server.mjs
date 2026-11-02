@@ -3,13 +3,13 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
-import { syncLive } from "@livelite/core";
+import { syncLive } from "@hum/core";
 import {
   createLiveHandler,
   LiveHub,
   TicketStore,
   toNodeHandler,
-} from "@livelite/server";
+} from "@hum/server";
 
 const local = (name) => fileURLToPath(new URL(name, import.meta.url));
 const PORT = Number(process.env.PORT ?? 4477);
@@ -154,7 +154,7 @@ const server = http.createServer(async (request, response) => {
 });
 
 server.listen(PORT, () => {
-  console.log(`\n  livelite demo → http://localhost:${PORT}`);
+  console.log(`\n  hum demo → http://localhost:${PORT}`);
   console.log(`  tables: ${synced.tables.map((t) => t.name).join(", ")}`);
   console.log(`  try:    sqlite3 examples/demo/demo.db "insert into users (name, org_id) values ('from the CLI', 1)"\n`);
 });

@@ -1,4 +1,4 @@
-# livelite — design spec
+# hum — design spec
 
 A drop-in realtime layer for SQLite. Any write, from any process, makes the
 React components that read those rows refetch. No new framework, no new

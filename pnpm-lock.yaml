@@ -32,13 +32,13 @@ importers:
 
   examples/demo:
     dependencies:
-      '@livelite/core':
+      '@hum/core':
         specifier: workspace:*
         version: link:../../packages/core
-      '@livelite/react':
+      '@hum/react':
         specifier: workspace:*
         version: link:../../packages/react
-      '@livelite/server':
+      '@hum/server':
         specifier: workspace:*
         version: link:../../packages/server
       react:
@@ -52,10 +52,10 @@ importers:
 
   packages/drizzle:
     dependencies:
-      '@livelite/core':
+      '@hum/core':
         specifier: workspace:*
         version: link:../core
-      '@livelite/server':
+      '@hum/server':
         specifier: workspace:*
         version: link:../server
 
@@ -67,7 +67,7 @@ importers:
 
   packages/server:
     dependencies:
-      '@livelite/core':
+      '@hum/core':
         specifier: workspace:*
         version: link:../core
 

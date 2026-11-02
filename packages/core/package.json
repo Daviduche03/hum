@@ -1,5 +1,5 @@
 {
-  "name": "@livelite/core",
+  "name": "@hum/core",
   "version": "0.0.0",
   "type": "module",
   "exports": {

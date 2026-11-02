@@ -1,4 +1,4 @@
-# livelite
+# hum
 
 Make any SQLite database realtime for React, without adopting a new framework.
 
@@ -42,7 +42,7 @@ trigger per table per operation. Idempotent.
 
 ```ts
 import { DatabaseSync } from "node:sqlite";
-import { syncLive, checkTriggers } from "@livelite/core";
+import { syncLive, checkTriggers } from "@hum/core";
 
 const db = new DatabaseSync("./app.db");
 const result = syncLive({ db });
@@ -59,7 +59,7 @@ the constructor and everything else is unchanged.
 ### 2. Register the queries clients may subscribe to
 
 ```ts
-import { LiveHub, TicketStore, createLiveHandler } from "@livelite/server";
+import { LiveHub, TicketStore, createLiveHandler } from "@hum/server";
 
 const queries = {
   "users.all": {
@@ -109,7 +109,7 @@ export const live = createLiveHandler(hub, tickets, {
 **Node HTTP / Express** (Express `req`/`res` are compatible):
 
 ```ts
-import { toNodeHandler } from "@livelite/server";
+import { toNodeHandler } from "@hum/server";
 app.use(toNodeHandler(live)); // mount at the root so /live/* is preserved
 ```
 
@@ -131,7 +131,7 @@ export const POST = (request: Request) => live(request);
 ### 4. React
 
 ```tsx
-import { LiveClient, useLiveQuery } from "@livelite/react";
+import { LiveClient, useLiveQuery } from "@hum/react";
 
 const client = new LiveClient({ basePath: "/live" });
 
@@ -162,7 +162,7 @@ keep types and dependency inference convenient:
 
 ```ts
 import { eq } from "drizzle-orm";
-import { defineDrizzleQuery } from "@livelite/drizzle";
+import { defineDrizzleQuery } from "@hum/drizzle";
 
 const queries = {
   "users.byOrg": defineDrizzleQuery({
@@ -180,7 +180,7 @@ inference and the params become part of the subscription key.
 
 ## API surface
 
-### `@livelite/core`
+### `@hum/core`
 
 | Export | Purpose |
 |---|---|
@@ -191,7 +191,7 @@ inference and the params become part of the subscription key.
 | `tablesForSql(db, sql, params, known?)` | Planner-derived table dependencies. |
 | `currentSeq(db)`, `stableStringify(value)` | Small helpers. |
 
-### `@livelite/server`
+### `@hum/server`
 
 | Export | Purpose |
 |---|---|
@@ -200,7 +200,7 @@ inference and the params become part of the subscription key.
 | `toNodeHandler(handler)` | Node/Express adapter. |
 | `TicketStore` | Single-use stream tickets (30s default). |
 
-### `@livelite/react`
+### `@hum/react`
 
 | Export | Purpose |
 |---|---|

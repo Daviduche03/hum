@@ -16,7 +16,7 @@ import {
 } from "../src/index.ts";
 
 function openDb() {
-  const dir = mkdtempSync(join(tmpdir(), "livelite-"));
+  const dir = mkdtempSync(join(tmpdir(), "hum-"));
   const db = new DatabaseSync(join(dir, "test.db"));
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`

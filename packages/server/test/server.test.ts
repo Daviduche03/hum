@@ -7,7 +7,7 @@ import { DatabaseSync } from "node:sqlite";
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { syncLive } from "@livelite/core";
+import { syncLive } from "@hum/core";
 import {
   createLiveHandler,
   LiveHub,
@@ -24,7 +24,7 @@ interface Harness {
 }
 
 async function start(): Promise<Harness> {
-  const dir = mkdtempSync(join(tmpdir(), "livelite-server-"));
+  const dir = mkdtempSync(join(tmpdir(), "hum-server-"));
   const db = new DatabaseSync(join(dir, "test.db"));
   db.exec("PRAGMA journal_mode = WAL");
   db.exec(`

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
-import { LiveClient, useLiveQuery, type LiveStatus } from "@livelite/react";
+import { LiveClient, useLiveQuery, type LiveStatus } from "@hum/react";
 
 // One client per tab. Every hook below multiplexes over its single SSE stream.
 const client = new LiveClient({ basePath: "/live" });
@@ -161,7 +161,7 @@ function App() {
     <main className="wrap">
       <header className="top">
         <div>
-          <h1>livelite</h1>
+          <h1>hum</h1>
           <p className="sub">
             Any SQLite row change → a trigger → an outbox row → one SSE frame →
             the React component refetches.

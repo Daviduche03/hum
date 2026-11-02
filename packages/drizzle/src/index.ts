@@ -1,5 +1,5 @@
-import { tablesForSql, type LiveDb } from "@livelite/core";
-import type { Ctx, QueryDef, QueryRegistry } from "@livelite/server";
+import { tablesForSql, type LiveDb } from "@hum/core";
+import type { Ctx, QueryDef, QueryRegistry } from "@hum/server";
 
 /** Anything Drizzle returns from `.select()` / `.insert()` / raw `sql`. */
 export interface DrizzleQuery {

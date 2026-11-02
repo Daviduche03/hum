@@ -4,9 +4,9 @@
   "private": true,
   "type": "module",
   "dependencies": {
-    "@livelite/core": "workspace:*",
-    "@livelite/react": "workspace:*",
-    "@livelite/server": "workspace:*",
+    "@hum/core": "workspace:*",
+    "@hum/react": "workspace:*",
+    "@hum/server": "workspace:*",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
   }

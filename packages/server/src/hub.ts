@@ -7,7 +7,7 @@ import {
   Tailer,
   type ChangeBatch,
   type LiveDb,
-} from "@livelite/core";
+} from "@hum/core";
 import { Connection } from "./connection.ts";
 import {
   deny,
