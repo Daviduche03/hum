@@ -8,7 +8,10 @@
     "test": "node --test packages/core/test/*.test.ts packages/server/test/*.test.ts packages/react/test/*.test.ts",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "demo": "node examples/demo/server.mjs",
-    "demo:build": "node examples/demo/build.mjs"
+    "demo:build": "node examples/demo/build.mjs",
+    "chat": "node examples/chat/server.mjs",
+    "chat:build": "node examples/chat/build.mjs",
+    "chat:bench": "node examples/chat/bench.mjs"
   },
   "devDependencies": {
     "@types/node": "^24.0.0",

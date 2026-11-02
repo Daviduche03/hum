@@ -3,5 +3,5 @@ dist
 *.db
 *.db-wal
 *.db-shm
-examples/demo/public/
+examples/*/public/
 .DS_Store

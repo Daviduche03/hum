@@ -33,6 +33,52 @@ sqlite3 examples/demo/demo.db \
 
 Open the page twice to see both tabs update from one write.
 
+## Group chat example
+
+`examples/chat` is the stress case: many people writing the same table, read
+receipts, and history pagination. It also ships a benchmark.
+
+```bash
+pnpm chat:build
+pnpm chat          # http://localhost:4478
+pnpm chat:bench    # 30 simulated viewers, prints latency + refetch counts
+```
+
+Open `http://localhost:4478/?as=grace` in a second window to be someone else.
+The switcher in the sidebar does the same thing.
+
+What it demonstrates:
+
+- **Message fan-out.** A post is one `INSERT`; every viewer in the room is told
+  the `messages` table changed and refetches the last 50 rows.
+- **Read receipts.** Marking a room read writes one row to `reads`, which
+  invalidates `rooms.forUser` and clears the badge — a second live query,
+  driven by a write, no extra channels.
+- **Merge-on-scroll pagination.** `useLiveQuery` replaces its data on every
+  refetch, so older pages live in component state and are merged by `id`. This
+  is the part the library does not do for you.
+
+### Measured (30 viewers, one room, one writer)
+
+```
+Phase A  one message at a time     post→all viewers  p50 6.6ms   p95 9.4ms
+Phase B  10 messages/sec           post→all viewers  p50 4.6ms   p95 12.0ms
+Phase C  500 messages, same proc   ~840 posts/s, converged in ~600ms
+Phase D  500 rows, another process 1 frame per viewer, converged in ~120ms
+```
+
+Two things fall out of that:
+
+- **In-process writes buy latency at the cost of coalescing.** `onWrite`
+  flushes per request, so 500 posts produce 500 frames per viewer — but the
+  client's in-flight dedupe cut 15,000 potential refetches down to ~770.
+- **Out-of-process writes coalesce for free.** The same 500 rows written by
+  another connection arrive as **one** frame, because the 250ms poll folds the
+  whole burst. Convergence is bounded by the poll interval.
+
+So chat at human pace is single-digit milliseconds; chat at machine pace is
+bounded by refetches, not by the SSE layer.
+
 ## Quick start
 
 ### 1. Install the capture layer
@@ -283,18 +329,21 @@ were created and never opened a stream.
 ## Project layout
 
 ```
-packages/core     outbox, triggers, tailer, retention, deps, write + drizzle helpers
+packages/core     outbox, triggers, tailer, retention, deps, write + drizzle
 packages/server   hub, subscriptions, SSE, tickets, node adapter
 packages/react    LiveClient + useLiveQuery
 examples/demo     runnable end-to-end app
+examples/chat     group chat + benchmark
 ```
 
 ## Development
 
 ```bash
-pnpm test        # 28 tests: triggers, tailer, retention, HTTP/SSE, backpressure, chaos
+pnpm test        # 30 tests: triggers, tailer, retention, HTTP/SSE, backpressure, chaos
 pnpm typecheck
 pnpm demo:build && pnpm demo
+pnpm chat:build && pnpm chat
+pnpm chat:bench
 ```
 
 All tests run against real SQLite files in WAL mode. `chaos.test.ts` drives

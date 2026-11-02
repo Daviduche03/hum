@@ -30,6 +30,24 @@ importers:
         specifier: ^5.7.0
         version: 5.9.3
 
+  examples/chat:
+    dependencies:
+      '@hum/core':
+        specifier: workspace:*
+        version: link:../../packages/core
+      '@hum/react':
+        specifier: workspace:*
+        version: link:../../packages/react
+      '@hum/server':
+        specifier: workspace:*
+        version: link:../../packages/server
+      react:
+        specifier: ^19.0.0
+        version: 19.3.1
+      react-dom:
+        specifier: ^19.0.0
+        version: 19.3.1(react@19.3.1)
+
   examples/demo:
     dependencies:
       '@hum/core':
