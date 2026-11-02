@@ -1,0 +1,12 @@
+{
+  "name": "@livelite/server",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@livelite/core": "workspace:*"
+  },
+  "files": ["src"]
+}

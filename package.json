@@ -1,0 +1,22 @@
+{
+  "name": "livelite",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@11.25.0",
+  "scripts": {
+    "test": "node --test packages/core/test/*.test.ts packages/server/test/*.test.ts packages/react/test/*.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "demo": "node examples/demo/server.mjs",
+    "demo:build": "node examples/demo/build.mjs"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "@types/react": "^19.0.0",
+    "@types/react-dom": "^19.0.0",
+    "esbuild": "^0.25.0",
+    "react": "^19.0.0",
+    "react-dom": "^19.0.0",
+    "typescript": "^5.7.0"
+  }
+}

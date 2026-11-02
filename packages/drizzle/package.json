@@ -1,0 +1,13 @@
+{
+  "name": "@livelite/drizzle",
+  "version": "0.0.0",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "dependencies": {
+    "@livelite/core": "workspace:*",
+    "@livelite/server": "workspace:*"
+  },
+  "files": ["src"]
+}
