@@ -7,3 +7,5 @@ export * from "./tailer.ts";
 export * from "./retention.ts";
 export * from "./stable.ts";
 export * from "./write.ts";
+export * from "./query.ts";
+export * from "./drizzle.ts";

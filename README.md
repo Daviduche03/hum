@@ -178,12 +178,12 @@ latency one: the poll still finds the change.
 
 ## Drizzle
 
-Drizzle emits plain SQL, so capture needs no integration. The adapter exists to
-keep types and dependency inference convenient:
+Drizzle emits plain SQL, so capture needs no integration. The helper in
+`@hum/core` exists to keep types and dependency inference convenient:
 
 ```ts
 import { eq } from "drizzle-orm";
-import { defineDrizzleQuery } from "@hum/drizzle";
+import { defineDrizzleQuery } from "@hum/core";
 
 const queries = {
   "users.byOrg": defineDrizzleQuery({
@@ -211,6 +211,7 @@ inference and the params become part of the subscription key.
 | `compact({ db, minCursor?, keep? })` | Prune the outbox and record `truncated_through`. |
 | `tablesForSql(db, sql, params, known?)` | Planner-derived table dependencies. |
 | `onWrite(db, notify)` | Proxy that calls `notify` after `run()`/`exec()`. Pair with `hub.flush()`. |
+| `defineDrizzleQuery({ build, params?, tables?, authorize? })` | Drizzle builder → query definition. Also `compileDrizzle`, `drizzleTables`, `defineRegistry`. |
 | `currentSeq(db)`, `stableStringify(value)` | Small helpers. |
 
 `capture` controls what a trigger writes: `"row"` (default) stores the primary
@@ -282,9 +283,8 @@ were created and never opened a stream.
 ## Project layout
 
 ```
-packages/core     outbox, triggers, tailer, retention, deps, write helper
+packages/core     outbox, triggers, tailer, retention, deps, write + drizzle helpers
 packages/server   hub, subscriptions, SSE, tickets, node adapter
-packages/drizzle  defineDrizzleQuery / dependency helpers
 packages/react    LiveClient + useLiveQuery
 examples/demo     runnable end-to-end app
 ```

@@ -8,7 +8,11 @@ import { test } from "node:test";
 import {
   checkTriggers,
   compact,
+  compileDrizzle,
   currentSeq,
+  defineDrizzleQuery,
+  defineRegistry,
+  drizzleTables,
   onWrite,
   syncLive,
   tablesForSql,
@@ -355,3 +359,30 @@ test("an outbox created with a NOT NULL pk is migrated in place", () => {
   }
 });
 
+test("defineDrizzleQuery compiles SQL and resolves real table dependencies", () => {
+  const h = openDb();
+  try {
+    const query = defineDrizzleQuery({
+      build: (ctx) => ({
+        toSQL: () => ({
+          sql: "SELECT u.name FROM users u JOIN posts p ON p.user_id = u.id WHERE u.org_id = ?",
+          params: [ctx.orgId],
+        }),
+      }),
+    });
+
+    const built = query.build({ orgId: 7 }, undefined);
+    assert.deepEqual(compileDrizzle(built), {
+      sql: "SELECT u.name FROM users u JOIN posts p ON p.user_id = u.id WHERE u.org_id = ?",
+      params: [7],
+    });
+
+    // Planner prints aliases ("u", "p"); the helper must return real tables.
+    assert.deepEqual(drizzleTables(h.db, built).sort(), ["posts", "users"]);
+
+    const registry = defineRegistry({ "users.byOrg": query });
+    assert.deepEqual(Object.keys(registry), ["users.byOrg"]);
+  } finally {
+    h.close();
+  }
+});

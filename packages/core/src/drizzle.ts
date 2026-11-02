@@ -1,9 +1,10 @@
-import { tablesForSql, type LiveDb } from "@hum/core";
-import type { Ctx, QueryDef, QueryRegistry } from "@hum/server";
+import { knownTables, tablesForSql } from "./deps.ts";
+import type { Ctx, QueryDef, QueryRegistry, RawSql } from "./query.ts";
+import type { LiveDb } from "./types.ts";
 
 /** Anything Drizzle returns from `.select()` / `.insert()` / raw `sql`. */
 export interface DrizzleQuery {
-  toSQL(): { sql: string; params: unknown[] };
+  toSQL(): { sql: string; params?: unknown[] };
 }
 
 /**
@@ -28,24 +29,32 @@ export function defineDrizzleQuery<P = unknown>(definition: {
   return definition;
 }
 
-/** Compile a Drizzle query into plain SQL + params. */
-export function compileDrizzle(query: DrizzleQuery): {
+/** Compile a Drizzle builder (or a raw `{ sql, params }`) into plain SQL. */
+export function compileDrizzle(query: DrizzleQuery | RawSql): {
   sql: string;
   params: unknown[];
 } {
-  const compiled = query.toSQL();
-  return { sql: compiled.sql, params: compiled.params ?? [] };
+  if (typeof (query as DrizzleQuery).toSQL === "function") {
+    const compiled = (query as DrizzleQuery).toSQL();
+    return { sql: compiled.sql, params: compiled.params ?? [] };
+  }
+  const raw = query as RawSql;
+  return { sql: raw.sql, params: raw.params ?? [] };
 }
 
 /**
  * Derive table dependencies straight from the planner.
  *
- * Useful when you want to register a plain query registry entry but let the
- * `drizzle` package own the inference.
+ * Useful when you register a plain query registry entry but still want the
+ * compiled SQL to decide what to subscribe to. Real table names are filtered
+ * against `sqlite_master`, so planner noise and aliases are discarded.
  */
-export function drizzleTables(db: LiveDb, query: DrizzleQuery): string[] {
+export function drizzleTables(
+  db: LiveDb,
+  query: DrizzleQuery | RawSql,
+): string[] {
   const { sql, params } = compileDrizzle(query);
-  return tablesForSql(db, sql, params);
+  return tablesForSql(db, sql, params, knownTables(db));
 }
 
 export function defineRegistry(definitions: QueryRegistry): QueryRegistry {

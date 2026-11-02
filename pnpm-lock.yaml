@@ -50,15 +50,6 @@ importers:
 
   packages/core: {}
 
-  packages/drizzle:
-    dependencies:
-      '@hum/core':
-        specifier: workspace:*
-        version: link:../core
-      '@hum/server':
-        specifier: workspace:*
-        version: link:../server
-
   packages/react:
     dependencies:
       '@hum/core':
