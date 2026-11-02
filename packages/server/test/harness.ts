@@ -68,6 +68,9 @@ export async function start(options: HarnessOptions = {}): Promise<Harness> {
       tables: ["users"],
       authorize: (ctx) => ctx.role !== "guest",
     },
+    "users.tablesOnly": {
+      tables: ["users"],
+    },
   };
 
   const hub = new LiveHub({

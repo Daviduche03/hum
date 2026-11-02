@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 
-import { Connection } from "../src/index.ts";
+import { Connection, LiveHub } from "../src/index.ts";
 import {
   connect,
   delay,
@@ -129,6 +129,36 @@ test("malformed params are rejected without revealing the query", async () => {
     const { connId } = await connect(h.base);
     const bad = await subscribe(h.base, connId, "q1", "users.byId", {});
     assert.equal(bad.status, 400);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a query that declares tables needs no SQL at all", async () => {
+  const h = await start();
+  try {
+    const { connId } = await connect(h.base);
+    const response = await subscribe(h.base, connId, "q1", "users.tablesOnly");
+    assert.equal(response.status, 200);
+
+    const body = (await response.json()) as { tables: string[] };
+    assert.deepEqual(body.tables, ["users"]);
+  } finally {
+    await h.close();
+  }
+});
+
+test("a query with neither build nor tables fails at construction", async () => {
+  const h = await start();
+  try {
+    assert.throws(
+      () =>
+        new LiveHub({
+          db: h.db,
+          queries: { broken: {} as never },
+        }),
+      /needs either/,
+    );
   } finally {
     await h.close();
   }

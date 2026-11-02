@@ -106,7 +106,9 @@ which tables a query touches. Two wrinkles:
   correct; a silent no-notification subscription is not.
 
 `QueryDef.tables` overrides inference when you want precision (views, virtual
-tables, CTEs that the heuristic misses).
+tables, CTEs that the heuristic misses). **`tables` alone is a complete
+definition** — with it the hub never compiles SQL. `build` exists only so the
+planner can infer; it is never executed by the server.
 
 ## Transport
 

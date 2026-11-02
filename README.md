@@ -61,11 +61,14 @@ What it demonstrates:
 ### Measured (30 viewers, one room, one writer)
 
 ```
-Phase A  one message at a time     post→all viewers  p50 6.6ms   p95 9.4ms
-Phase B  10 messages/sec           post→all viewers  p50 4.6ms   p95 12.0ms
+Phase A  one message at a time     post→all viewers  p50 ~7ms   p95 ~10ms
+Phase B  10 messages/sec           post→all viewers  p50 ~5ms   p95 ~12ms
 Phase C  500 messages, same proc   ~840 posts/s, converged in ~600ms
-Phase D  500 rows, another process 1 frame per viewer, converged in ~120ms
+Phase D  500 rows, another process 1 frame per viewer, converged in 100–250ms
 ```
+
+Phase D depends on where the write lands relative to the 250ms poll, so it
+reports a range rather than a number.
 
 Two things fall out of that:
 
@@ -120,8 +123,8 @@ const queries = {
       if (!Number.isInteger(orgId)) throw new Error("org_id");
       return { org_id: orgId };
     },
-    // Tables are inferred from EXPLAIN QUERY PLAN. Override with
-    // `tables: ["users"]` when you want precision.
+    // Tables are inferred from EXPLAIN QUERY PLAN. Swap `build` for
+    // `tables: ["users"]` and no SQL is compiled at all.
     build: (ctx, params) => ({
       sql: "select id, name, org_id from users where org_id = ? order by id desc",
       params: [params.org_id],
@@ -245,6 +248,43 @@ inference and the params become part of the subscription key.
 > triggers. Call `syncLive({ db })` at boot (or in a `predev`/`predeploy`
 > script) and optionally assert `checkTriggers(db).missing` is empty.
 
+## Query definitions
+
+A query is a name, an optional param parser, and **either** a builder **or** a
+list of tables.
+
+```ts
+interface QueryDef<P = any> {
+  params?: (raw: unknown) => P;                                  // throw to reject (400)
+  build?: (ctx: Ctx, params: P) => { sql: string; params?: unknown[] } | { toSQL(): … };
+  tables?: string[] | ((ctx: Ctx, params: P) => string[]);
+  authorize?: (ctx: Ctx, params: P) => boolean | Promise<boolean>;
+}
+```
+
+**One of `build` or `tables` is required**, and `tables` wins: with it, no SQL
+is compiled and `build` is never called. That is the "I already know what this
+reads" mode:
+
+```ts
+"users.all": { tables: ["users"] }
+```
+
+`build` is not a data path either. The hub compiles it and passes it to
+`EXPLAIN QUERY PLAN` to work out dependencies — it never executes it. Your
+route still fetches the rows, and can run the same definition so the SQL exists
+once:
+
+```ts
+const def = queries["users.byOrg"];
+const params = def.params?.(raw);
+const { sql, params: values } = def.build!(ctx, params);
+db.prepare(sql).all(...values);
+```
+
+`LiveHub` throws at construction if a query has neither, so a broken registry
+fails at boot instead of returning a mysterious 403 on first subscribe.
+
 ## API surface
 
 ### `@hum/core`
@@ -257,7 +297,7 @@ inference and the params become part of the subscription key.
 | `compact({ db, minCursor?, keep? })` | Prune the outbox and record `truncated_through`. |
 | `tablesForSql(db, sql, params, known?)` | Planner-derived table dependencies. |
 | `onWrite(db, notify)` | Proxy that calls `notify` after `run()`/`exec()`. Pair with `hub.flush()`. |
-| `defineDrizzleQuery({ build, params?, tables?, authorize? })` | Drizzle builder → query definition. Also `compileDrizzle`, `drizzleTables`, `defineRegistry`. |
+| `defineDrizzleQuery({ build?, tables?, params?, authorize? })` | Drizzle builder → query definition (one of `build`/`tables` required). Also `compileDrizzle`, `drizzleTables`, `defineRegistry`. |
 | `currentSeq(db)`, `stableStringify(value)` | Small helpers. |
 
 `capture` controls what a trigger writes: `"row"` (default) stores the primary

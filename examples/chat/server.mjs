@@ -111,13 +111,15 @@ function identify(source) {
 /**
  * The allowlist. Clients send a name + params, never SQL.
  *
- * `tables` is declared rather than inferred here: the unread count reads
- * `messages` and `reads` through correlated subqueries, and being explicit is
- * cheaper and more obvious than trusting planner output.
+ * Two shapes are shown on purpose:
+ * - `rooms.forUser` declares `tables`, so no SQL is compiled at all. The room
+ *   list is read by its own route below.
+ * - `messages.latest` provides `build`, so the hub asks `EXPLAIN QUERY PLAN`
+ *   for dependencies. The same definition is executed by the read route, so
+ *   that SQL exists once.
  */
 const queries = {
   "rooms.forUser": {
-    build: (ctx) => ({ sql: ROOMS_SQL, params: [ctx.userId] }),
     tables: ["rooms", "messages", "reads"],
   },
   "messages.latest": {
@@ -134,9 +136,16 @@ const queries = {
             LIMIT 50`,
       params: [params.room_id],
     }),
-    tables: ["messages", "users"],
   },
 };
+
+/** Execute a registry entry: the live definition is also the read path. */
+function runQuery(name, rawParams) {
+  const def = queries[name];
+  const params = def.params ? def.params(rawParams) : rawParams;
+  const compiled = def.build({}, params);
+  return db.prepare(compiled.sql).all(...compiled.params);
+}
 
 const hub = new LiveHub({
   db,
@@ -214,23 +223,17 @@ const server = http.createServer(async (request, response) => {
     const roomId = Number(url.searchParams.get("room_id"));
     if (!Number.isInteger(roomId)) return json(response, { error: "room_id" }, 400);
     const before = Number(url.searchParams.get("before"));
-    const rows = Number.isInteger(before) && before > 0
-      ? db
-          .prepare(
-            `SELECT m.id, m.room_id, m.body, m.created_at, m.author_id, u.name AS author
-             FROM messages m JOIN users u ON u.id = m.author_id
-             WHERE m.room_id = ? AND m.id < ?
-             ORDER BY m.id DESC LIMIT 30`,
-          )
-          .all(roomId, before)
-      : db
-          .prepare(
-            `SELECT m.id, m.room_id, m.body, m.created_at, m.author_id, u.name AS author
-             FROM messages m JOIN users u ON u.id = m.author_id
-             WHERE m.room_id = ?
-             ORDER BY m.id DESC LIMIT 50`,
-          )
-          .all(roomId);
+    const rows =
+      Number.isInteger(before) && before > 0
+        ? db
+            .prepare(
+              `SELECT m.id, m.room_id, m.body, m.created_at, m.author_id, u.name AS author
+               FROM messages m JOIN users u ON u.id = m.author_id
+               WHERE m.room_id = ? AND m.id < ?
+               ORDER BY m.id DESC LIMIT 30`,
+            )
+            .all(roomId, before)
+        : runQuery("messages.latest", { room_id: roomId });
     return json(response, { rows: rows.map((row) => ({ ...row })) });
   }
 

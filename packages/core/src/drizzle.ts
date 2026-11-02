@@ -1,5 +1,12 @@
 import { knownTables, tablesForSql } from "./deps.ts";
-import type { Ctx, QueryDef, QueryRegistry, RawSql } from "./query.ts";
+import type {
+  BuildableQuery,
+  Ctx,
+  QueryDef,
+  QueryRegistry,
+  RawSql,
+  TablesQuery,
+} from "./query.ts";
 import type { LiveDb } from "./types.ts";
 
 /** Anything Drizzle returns from `.select()` / `.insert()` / raw `sql`. */
@@ -19,14 +26,32 @@ export interface DrizzleQuery {
  *         build: (ctx) => db.select().from(users).where(eq(users.orgId, ctx.orgId)),
  *       }),
  *     };
+ *
+ * Pass `tables` instead of `build` when you already know the dependencies; no
+ * SQL is compiled in that case.
  */
 export function defineDrizzleQuery<P = unknown>(definition: {
   params?: (raw: unknown) => P;
   build: (ctx: Ctx, params: P) => DrizzleQuery;
   tables?: string[] | ((ctx: Ctx, params: P) => string[]);
   authorize?: (ctx: Ctx, params: P) => boolean | Promise<boolean>;
+}): BuildableQuery<P>;
+export function defineDrizzleQuery<P = unknown>(definition: {
+  params?: (raw: unknown) => P;
+  build?: (ctx: Ctx, params: P) => DrizzleQuery;
+  tables: string[] | ((ctx: Ctx, params: P) => string[]);
+  authorize?: (ctx: Ctx, params: P) => boolean | Promise<boolean>;
+}): TablesQuery<P>;
+export function defineDrizzleQuery<P = unknown>(definition: {
+  params?: (raw: unknown) => P;
+  build?: (ctx: Ctx, params: P) => DrizzleQuery;
+  tables?: string[] | ((ctx: Ctx, params: P) => string[]);
+  authorize?: (ctx: Ctx, params: P) => boolean | Promise<boolean>;
 }): QueryDef<P> {
-  return definition;
+  if (!definition.build && !definition.tables) {
+    throw new Error("defineDrizzleQuery needs either `build` or `tables`");
+  }
+  return definition as QueryDef<P>;
 }
 
 /** Compile a Drizzle builder (or a raw `{ sql, params }`) into plain SQL. */

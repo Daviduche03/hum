@@ -382,6 +382,13 @@ test("defineDrizzleQuery compiles SQL and resolves real table dependencies", () 
 
     const registry = defineRegistry({ "users.byOrg": query });
     assert.deepEqual(Object.keys(registry), ["users.byOrg"]);
+
+    // `tables` alone is a complete definition.
+    const tablesOnly = defineDrizzleQuery({ tables: ["users"] });
+    assert.deepEqual(tablesOnly, { tables: ["users"] });
+
+    // Types already reject this; the runtime guard catches untyped callers.
+    assert.throws(() => defineDrizzleQuery({} as never), /build.*tables/);
   } finally {
     h.close();
   }

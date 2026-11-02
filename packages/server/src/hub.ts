@@ -97,6 +97,18 @@ export class LiveHub {
       ((ctx) => String(ctx.userId ?? ctx.sessionId ?? ctx.orgId ?? ""));
     this.known = knownTables(this.db);
 
+    // Fail at boot, not on the first subscription: a query with neither a
+    // builder nor declared tables can never resolve to dependencies.
+    for (const [name, def] of Object.entries(this.queries)) {
+      if (!def.build && !def.tables) {
+        throw new LiveHubError(
+          "E_CONFIG",
+          `query "${name}" needs either \`build\` or \`tables\``,
+          500,
+        );
+      }
+    }
+
     this.tailer = new Tailer({
       db: this.db,
       outbox: this.outbox,
@@ -191,7 +203,7 @@ export class LiveHub {
 
     let tables: string[];
     try {
-      tables = this.tablesFor(def, connection.ctx, params);
+      tables = this.tablesFor(name, def, connection.ctx, params);
     } catch {
       throw deny();
     }
@@ -268,12 +280,21 @@ export class LiveHub {
   }
 
   private tablesFor(
+    name: string,
     def: QueryDef,
     ctx: Ctx,
     params: unknown,
   ): string[] {
     if (typeof def.tables === "function") return def.tables(ctx, params);
     if (Array.isArray(def.tables)) return def.tables;
+
+    if (!def.build) {
+      throw new LiveHubError(
+        "E_CONFIG",
+        `query "${name}" needs either \`build\` or \`tables\``,
+        500,
+      );
+    }
 
     const sql = resolveSql(def.build(ctx, params));
     const inferred = tablesForSql(this.db, sql.sql, sql.params, this.known);
