@@ -12,7 +12,14 @@ export interface TailerOptions {
   db: LiveDb;
   outbox?: string;
   meta?: string;
-  /** How often to check for new change rows. Default 40ms. */
+  /**
+   * How often to check for new change rows. Default 250ms.
+   *
+   * This is the fallback path for writes made by *other* processes. Writes
+   * through the same process should call `LiveHub.flush()` (or wrap the
+   * database with `onWrite()`), which is what keeps in-process latency near
+   * zero without paying for a tight poll.
+   */
   pollMs?: number;
   /** Rows per read. Default 500. */
   batchSize?: number;
@@ -42,7 +49,7 @@ export class Tailer {
 
   constructor(options: TailerOptions) {
     this.options = {
-      pollMs: 40,
+      pollMs: 250,
       batchSize: 500,
       maxBatches: 8,
       startAt: "now",

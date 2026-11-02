@@ -1,5 +1,5 @@
 import type { LiveHub } from "./hub.ts";
-import type { TicketStore } from "./tickets.ts";
+import type { TicketStoreLike } from "./tickets.ts";
 import type { Ctx } from "./types.ts";
 import { LiveHubError } from "./types.ts";
 
@@ -29,7 +29,7 @@ const JSON_HEADERS = { "content-type": "application/json; charset=utf-8" };
  */
 export function createLiveHandler(
   hub: LiveHub,
-  tickets: TicketStore,
+  tickets: TicketStoreLike,
   options: LiveHandlerOptions,
 ): Handler {
   const base = (options.basePath ?? "/live").replace(/\/$/, "");
@@ -157,14 +157,25 @@ function streamResponse(
   request: Request,
   onClose: () => void,
 ): Response {
-  const stream = new ReadableStream<Uint8Array>({
-    start(controller) {
-      connection.attach(controller);
+  const stream = new ReadableStream<Uint8Array>(
+    {
+      start(controller) {
+        connection.attach(controller);
+      },
+      // The consumer drained the queue. If a backpressure resync is owed, this
+      // is the moment to write it.
+      pull() {
+        connection.flushResync();
+      },
+      cancel() {
+        onClose();
+      },
     },
-    cancel() {
-      onClose();
-    },
-  });
+    // A tight high-water mark drops frames on any burst. 64 messages is still
+    // bounded and makes real backpressure (not a one-tick-late reader) the
+    // thing that triggers a drop.
+    { highWaterMark: 64 },
+  );
 
   request.signal?.addEventListener?.("abort", () => onClose(), { once: true });
 
@@ -178,14 +189,51 @@ function streamResponse(
   });
 }
 
+/**
+ * Read a JSON body without buffering more than `limit` bytes.
+ *
+ * The previous order — read everything, then check the size — made the cap a
+ * formality: a 2 GB POST was fully materialised before being rejected.
+ */
 async function readJson(request: Request, limit: number): Promise<any> {
-  const text = await request.text();
-  if (text.length > limit) {
+  const declared = Number(request.headers.get("content-length") ?? "");
+  if (Number.isFinite(declared) && declared > limit) {
     throw new LiveHubError("E_BODY", "body too large", 413);
   }
-  if (!text) return {};
+
+  if (!request.body) return {};
+
+  const reader = request.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let size = 0;
+
   try {
-    return JSON.parse(text);
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      if (!value) continue;
+      size += value.byteLength;
+      if (size > limit) {
+        await reader.cancel().catch(() => {});
+        throw new LiveHubError("E_BODY", "body too large", 413);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock?.();
+  }
+
+  if (size === 0) return {};
+
+  const merged = new Uint8Array(size);
+  let offset = 0;
+  for (const chunk of chunks) {
+    merged.set(chunk, offset);
+    offset += chunk.byteLength;
+  }
+
+  try {
+    return JSON.parse(new TextDecoder().decode(merged));
   } catch {
     throw new LiveHubError("E_BODY", "invalid json", 400);
   }

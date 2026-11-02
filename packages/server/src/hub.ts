@@ -23,8 +23,15 @@ export interface HubOptions {
   queries: QueryRegistry;
   outbox?: string;
   meta?: string;
-  /** Poll interval for the outbox tailer. Default 40ms. */
+  /** Poll interval for the outbox tailer. Default 250ms. */
   pollMs?: number;
+  /**
+   * Reap connections that never opened a stream. Default 30s. 0 disables.
+   *
+   * A client that POSTs `/connect` and then dies before opening the
+   * `EventSource` would otherwise sit in memory forever.
+   */
+  connectionTtlMs?: number;
   /** SSE keepalive interval. Default 25s. */
   heartbeatMs?: number;
   /** How often retention runs. Default 5s. 0 disables. */
@@ -94,7 +101,7 @@ export class LiveHub {
       db: this.db,
       outbox: this.outbox,
       meta: this.meta,
-      pollMs: options.pollMs ?? 40,
+      pollMs: options.pollMs ?? 250,
       onBatch: (batch) => this.onBatch(batch),
       onResync: (info) => {
         for (const connection of this.connections.values()) {
@@ -130,6 +137,7 @@ export class LiveHub {
     this.known = knownTables(this.db);
   }
 
+  /** Read the outbox once, right now. Call after in-process writes. */
   flush(): void {
     this.tailer.poll();
   }
@@ -319,6 +327,7 @@ export class LiveHub {
   }
 
   private runRetention(): void {
+    this.sweepConnections();
     try {
       const cursors = [...this.connections.values()]
         .filter((connection) => connection.attached)
@@ -336,6 +345,22 @@ export class LiveHub {
       });
     } catch {
       // Retention is best-effort; a failure must not take down the hub.
+    }
+  }
+
+  /**
+   * Drop connections that were created but never attached to a stream.
+   * Attached connections are owned by their stream and closed with it.
+   */
+  private sweepConnections(): void {
+    const ttl = this.options.connectionTtlMs ?? 30_000;
+    if (ttl <= 0) return;
+
+    const cutoff = Date.now() - ttl;
+    for (const connection of [...this.connections.values()]) {
+      if (connection.attached) continue;
+      if (connection.createdAt > cutoff) continue;
+      this.disconnect(connection.id);
     }
   }
 }

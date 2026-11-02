@@ -1,3 +1,5 @@
+import { stableStringify } from "@hum/core";
+
 export type LiveStatus =
   | "idle"
   | "connecting"
@@ -380,14 +382,14 @@ export class LiveClient {
     for (const id of ids) {
       const entry = this.byId.get(id);
       if (!entry) continue;
-      entry.snapshot = { ...entry.snapshot, seq };
+      this.patch(entry, { seq });
       void this.refetchEntry(entry);
     }
   }
 
   private setCursor(seq: number): void {
     for (const entry of this.entries.values()) {
-      entry.snapshot = { ...entry.snapshot, seq };
+      this.patch(entry, { seq });
     }
   }
 
@@ -427,7 +429,13 @@ export class LiveClient {
   }
 
   private patch(entry: LiveEntry<any>, partial: Partial<LiveSnapshot>): void {
-    entry.snapshot = { ...entry.snapshot, ...partial } as LiveSnapshot;
+    const next = { ...entry.snapshot, ...partial } as LiveSnapshot;
+    // A `sub` response can arrive after a change frame it raced with. The
+    // cursor is diagnostic, but it must not go backwards.
+    if (partial.seq !== undefined) {
+      next.seq = Math.max(entry.snapshot.seq, partial.seq);
+    }
+    entry.snapshot = next;
     for (const listener of entry.listeners) listener();
   }
 
@@ -472,23 +480,4 @@ export class LiveClient {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error(String(error));
-}
-
-function stableStringify(value: unknown): string {
-  return JSON.stringify(normalize(value));
-}
-
-function normalize(value: unknown): unknown {
-  if (value === undefined || value === null) return null;
-  if (Array.isArray(value)) return value.map(normalize);
-  if (typeof value === "object") {
-    const input = value as Record<string, unknown>;
-    const out: Record<string, unknown> = {};
-    for (const key of Object.keys(input).sort()) {
-      if (input[key] === undefined) continue;
-      out[key] = normalize(input[key]);
-    }
-    return out;
-  }
-  return value;
 }

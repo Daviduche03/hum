@@ -10,6 +10,19 @@ interface TicketRecord {
 }
 
 /**
+ * The handshake contract, kept structural so it can be backed by a shared
+ * store (Redis, a table) when `/live` runs on more than one process.
+ *
+ * `TicketStore` below is in-process, which means a ticket minted on one
+ * process cannot be redeemed on another. See the deployment note in the
+ * README.
+ */
+export interface TicketStoreLike {
+  issue(connId: string): { ticket: string; expiresAt: number };
+  redeem(ticket: string): string | null;
+}
+
+/**
  * Single-use, short-lived tickets for the SSE handshake.
  *
  * `EventSource` cannot send headers, so the stream URL has to carry something.
@@ -17,7 +30,7 @@ interface TicketRecord {
  * history. A ticket that is unguessable, scoped to one connection, and dead
  * after 30 seconds is the safe version of that.
  */
-export class TicketStore {
+export class TicketStore implements TicketStoreLike {
   private readonly tickets = new Map<string, TicketRecord>();
   private readonly ttlMs: number;
 

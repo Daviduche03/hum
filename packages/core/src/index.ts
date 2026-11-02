@@ -6,3 +6,4 @@ export * from "./deps.ts";
 export * from "./tailer.ts";
 export * from "./retention.ts";
 export * from "./stable.ts";
+export * from "./write.ts";

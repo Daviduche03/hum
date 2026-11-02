@@ -3,7 +3,7 @@ import { readFile } from "node:fs/promises";
 import { fileURLToPath } from "node:url";
 import { DatabaseSync } from "node:sqlite";
 
-import { syncLive } from "@hum/core";
+import { onWrite, syncLive } from "@hum/core";
 import {
   createLiveHandler,
   LiveHub,
@@ -69,7 +69,6 @@ const queries = {
 const hub = new LiveHub({
   db,
   queries,
-  pollMs: 40,
   compactEveryMs: 2_000,
   keep: 500,
   // In a shared multi-tenant database this is what keeps two accounts from
@@ -78,6 +77,10 @@ const hub = new LiveHub({
   identity: (ctx) => ctx.userId,
 });
 hub.start();
+
+// Every write through this handle flushes the tailer, so in-app changes land
+// immediately. Out-of-process writes (the sqlite3 CLI) are found by the poll.
+const liveDb = onWrite(db, () => hub.flush());
 
 const tickets = new TicketStore();
 
@@ -112,12 +115,12 @@ const server = http.createServer(async (request, response) => {
   if (request.method === "GET" && path === "/api/users") {
     const orgId = url.searchParams.get("org_id");
     const rows = orgId
-      ? db
+      ? liveDb
           .prepare(
             "SELECT id, name, org_id, created_at FROM users WHERE org_id = ? ORDER BY id DESC LIMIT 50",
           )
           .all(Number(orgId))
-      : db
+      : liveDb
           .prepare(
             "SELECT id, name, org_id, created_at FROM users ORDER BY id DESC LIMIT 50",
           )
@@ -132,16 +135,12 @@ const server = http.createServer(async (request, response) => {
     const body = await readBody(request);
     const name = String(body.name ?? "").trim() || "anonymous";
     const orgId = Number(body.org_id) === 2 ? 2 : 1;
-    db.prepare("INSERT INTO users (name, org_id) VALUES (?, ?)").run(name, orgId);
-    // Fast path: flush the tailer now instead of waiting for the next poll.
-    // Comment this out and the UI still updates, ~40ms later.
-    hub.flush();
+    liveDb.prepare("INSERT INTO users (name, org_id) VALUES (?, ?)").run(name, orgId);
     return json(response, { ok: true });
   }
 
   if (request.method === "POST" && path === "/api/reset") {
-    db.prepare("DELETE FROM users").run();
-    hub.flush();
+    liveDb.prepare("DELETE FROM users").run();
     return json(response, { ok: true });
   }
 

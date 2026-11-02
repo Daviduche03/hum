@@ -9,6 +9,7 @@ import {
   checkTriggers,
   compact,
   currentSeq,
+  onWrite,
   syncLive,
   tablesForSql,
   Tailer,
@@ -239,3 +240,118 @@ test("derives table dependencies from EXPLAIN QUERY PLAN", () => {
     h.close();
   }
 });
+
+test("syncLive does not rewrite triggers that already match", () => {
+  const h = openDb();
+  try {
+    const first = syncLive({ db: h.db });
+    assert.equal(first.changed, true);
+
+    const second = syncLive({ db: h.db });
+    assert.equal(second.changed, false);
+    assert.deepEqual(second.triggers, first.triggers);
+  } finally {
+    h.close();
+  }
+});
+
+test("capture: table writes table-level markers instead of primary keys", () => {
+  const h = openDb();
+  try {
+    syncLive({ db: h.db, capture: "table" });
+
+    const insert = h.db.prepare(
+      "INSERT INTO users (id, org_id, name) VALUES (?, ?, ?)",
+    );
+    for (let i = 1; i <= 200; i += 1) insert.run(i, 1, `u${i}`);
+
+    const rows = outbox(h.db);
+    assert.equal(rows.length, 200);
+    assert.ok(rows.every((row) => row.pk === null));
+
+    // Switching back rewrites the triggers, since their DDL differs.
+    const back = syncLive({ db: h.db, capture: "row" });
+    assert.equal(back.changed, true);
+  } finally {
+    h.close();
+  }
+});
+
+test("checkTriggers honours the same include/exclude filters as syncLive", () => {
+  const h = openDb();
+  try {
+    const exclude = (table: string) => table === "posts";
+    syncLive({ db: h.db, exclude });
+
+    assert.deepEqual(checkTriggers(h.db, { exclude }), {
+      missing: [],
+      orphaned: [],
+    });
+
+    // Without the filter, the skipped table looks like drift.
+    assert.ok(checkTriggers(h.db).missing.some((name) => name.includes("posts")));
+  } finally {
+    h.close();
+  }
+});
+
+test("onWrite notifies after writes, not after reads", () => {
+  const h = openDb();
+  try {
+    syncLive({ db: h.db });
+
+    let notifications = 0;
+    const live = onWrite(h.db, () => {
+      notifications += 1;
+    });
+
+    live.prepare("INSERT INTO users (id, org_id, name) VALUES (?, ?, ?)").run(1, 1, "a");
+    assert.equal(notifications, 1);
+
+    live.prepare("SELECT COUNT(*) AS c FROM users").all();
+    assert.equal(notifications, 1);
+
+    live.prepare("UPDATE users SET name = ? WHERE id = ?").run("b", 1);
+    assert.equal(notifications, 2);
+
+    live.exec("PRAGMA user_version = 1");
+    assert.equal(notifications, 3);
+
+    // Reads through the proxy still return real data.
+    const row = live.prepare("SELECT name FROM users WHERE id = ?").get(1) as {
+      name: string;
+    };
+    assert.equal(row.name, "b");
+  } finally {
+    h.close();
+  }
+});
+
+test("an outbox created with a NOT NULL pk is migrated in place", () => {
+  const h = openDb();
+  try {
+    h.db.exec(`CREATE TABLE _live_changes (
+      "seq" INTEGER PRIMARY KEY AUTOINCREMENT,
+      "tbl" TEXT NOT NULL,
+      "op" TEXT NOT NULL,
+      "pk" TEXT NOT NULL,
+      "ts" INTEGER NOT NULL DEFAULT 0
+    )`);
+    h.db.prepare(
+      `INSERT INTO _live_changes ("tbl", "op", "pk") VALUES ('users', 'insert', '[9]')`,
+    ).run();
+
+    syncLive({ db: h.db, capture: "table" });
+
+    const rows = outbox(h.db);
+    assert.equal(rows.length, 1);
+    assert.equal(rows[0]!.pk, "[9]");
+
+    // Table-level capture can now write NULL.
+    h.db.prepare("INSERT INTO users (id, org_id, name) VALUES (?, ?, ?)").run(1, 1, "a");
+    assert.equal(outbox(h.db).at(-1)!.pk, null);
+  } finally {
+    h.close();
+  }
+});
+

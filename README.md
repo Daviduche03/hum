@@ -155,6 +155,27 @@ function Users({ orgId }: { orgId: number }) {
 Components that pass the same `name` + `params` share one subscription and one
 in-flight fetch. Unmounting the last one unsubscribes.
 
+## Write path
+
+The outbox is polled, not pushed: `pollMs` defaults to 250ms, which covers
+writes made by *other* processes (a CLI, a migration, a cron job). For writes
+that go through the same process, tell the hub instead of waiting:
+
+```ts
+const hub = new LiveHub({ db, queries });
+hub.start();
+
+// Wrap the handle your app already uses. `run()` and `exec()` flush the
+// tailer immediately; reads are untouched.
+const live = onWrite(db, () => hub.flush());
+
+live.prepare("insert into users (name, org_id) values (?, ?)").run(name, orgId);
+```
+
+In-process latency is then whatever your own query costs — typically under a
+millisecond, not 250ms. Forgetting to flush is not a correctness bug, only a
+latency one: the poll still finds the change.
+
 ## Drizzle
 
 Drizzle emits plain SQL, so capture needs no integration. The adapter exists to
@@ -184,21 +205,27 @@ inference and the params become part of the subscription key.
 
 | Export | Purpose |
 |---|---|
-| `syncLive({ db, include?, exclude?, outbox?, meta? })` | Create outbox + triggers. Idempotent. Returns synced tables. |
-| `checkTriggers(db)` | `{ missing, orphaned }` for boot-time drift detection. |
+| `syncLive({ db, include?, exclude?, capture?, outbox?, meta? })` | Create outbox + triggers. Idempotent, and a no-op when the DDL already matches. |
+| `checkTriggers(db, { include?, exclude? })` | `{ missing, orphaned }` for boot-time drift detection. Pass the same filters you gave `syncLive`. |
 | `Tailer` | Cursor over `_live_changes`; emits coalesced `{ from, to, tables, count }`. |
 | `compact({ db, minCursor?, keep? })` | Prune the outbox and record `truncated_through`. |
 | `tablesForSql(db, sql, params, known?)` | Planner-derived table dependencies. |
+| `onWrite(db, notify)` | Proxy that calls `notify` after `run()`/`exec()`. Pair with `hub.flush()`. |
 | `currentSeq(db)`, `stableStringify(value)` | Small helpers. |
+
+`capture` controls what a trigger writes: `"row"` (default) stores the primary
+key of each affected row, `"table"` stores `NULL`. Invalidation is table-level
+either way, so `"table"` is strictly cheaper on bulk writes and correct for the
+delivered pipeline; `"row"` keeps the data needed for future row patches.
 
 ### `@hum/server`
 
 | Export | Purpose |
 |---|---|
-| `LiveHub({ db, queries, scope?, identity?, pollMs?, keep? })` | Registry, fan-out, tailer, retention. |
-| `createLiveHandler(hub, tickets, { authenticate, origin? })` | `(Request) => Response` router. |
+| `LiveHub({ db, queries, scope?, identity?, pollMs?, keep?, connectionTtlMs? })` | Registry, fan-out, tailer, retention. |
+| `createLiveHandler(hub, tickets, { authenticate, origin?, bodyLimit? })` | `(Request) => Response` router. |
 | `toNodeHandler(handler)` | Node/Express adapter. |
-| `TicketStore` | Single-use stream tickets (30s default). |
+| `TicketStore`, `TicketStoreLike` | Single-use stream tickets (30s default). Implement the interface to share them across processes. |
 
 ### `@hum/react`
 
@@ -217,6 +244,28 @@ inference and the params become part of the subscription key.
 - **Coalesced per commit.** The tailer folds a burst into one batch of table
   names.
 - **At-least-once, idempotent.** Duplicates are harmless; `seq` guards ordering.
+- **A dropped frame always ends in a resync.** Under backpressure the server
+  discards change frames — they carry no data — and queues exactly one `resync`
+  for the moment the consumer catches up. The pending resync survives a quiet
+  stream (it is flushed from `pull()`, the next send, or the heartbeat), so a
+  slow tab can be late but never silently stale.
+
+## Deployment
+
+`/live` must be served by **one process per database** — or by replicas that
+share state. The outbox is cross-process by design, so any number of processes
+can *write*; what is not shared is the connection registry and `TicketStore`.
+A ticket minted by process A cannot be redeemed by process B, and fan-out only
+reaches connections held by the process that tails the row.
+
+If you must run more than one instance, either pin `/live` to a single instance
+(shuffle sharding, sticky routes, a single live service) or supply a
+`TicketStoreLike` backed by shared storage *and* a cross-process transport for
+fan-out. Sticky sessions alone are not enough: the tailer that sees a write has
+to reach every connection.
+
+Connections are per-tab and in-memory. `connectionTtlMs` (30s) reaps ones that
+were created and never opened a stream.
 
 ## Security checklist
 
@@ -224,15 +273,16 @@ inference and the params become part of the subscription key.
 - [ ] Identity is in `scope` if one SQLite file holds multiple tenants.
 - [ ] Every query either scopes by `ctx` or has an `authorize` check.
 - [ ] `origin` is set for cookie-authenticated deployments.
-- [ ] Call `hub.disconnect(connId)` on logout/role change (epoch revalidation is
-      not implemented yet).
+- [ ] `hub.disconnect(connId)` is wired into logout and role changes. `ctx` is
+      captured at connect time, so a stream outlives a revoked session until you
+      close it.
 - [ ] Prefer one database file per tenant. Then a scoping bug is a physical
       boundary, not a query bug.
 
 ## Project layout
 
 ```
-packages/core     outbox, triggers, tailer, retention, deps
+packages/core     outbox, triggers, tailer, retention, deps, write helper
 packages/server   hub, subscriptions, SSE, tickets, node adapter
 packages/drizzle  defineDrizzleQuery / dependency helpers
 packages/react    LiveClient + useLiveQuery
@@ -242,10 +292,11 @@ examples/demo     runnable end-to-end app
 ## Development
 
 ```bash
-pnpm test        # 17 tests: triggers, tailer, retention, HTTP/SSE, client
+pnpm test        # 28 tests: triggers, tailer, retention, HTTP/SSE, backpressure, chaos
 pnpm typecheck
 pnpm demo:build && pnpm demo
 ```
 
-All tests run against real SQLite files in WAL mode. See `SPEC.md` for the
-invariants and the deferred work.
+All tests run against real SQLite files in WAL mode. `chaos.test.ts` drives
+concurrent writers, aggressive truncation and reconnects, then asserts no
+subscriber was left behind. See `SPEC.md` for the invariants.
