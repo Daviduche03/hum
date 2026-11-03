@@ -1,93 +1,46 @@
 # hum
 
-Make any SQLite database realtime for React, without adopting a new framework.
+**Realtime SQLite for React, without adopting a framework.**
 
-Writes from Drizzle, raw SQL, a migration, or `sqlite3` in a terminal all show
-up in the browser. The server sends "this query is stale"; your existing loader
-refetches.
+Any write to your SQLite file — Drizzle, raw SQL, a migration, `sqlite3` in a
+terminal — makes the React components reading those rows refetch. Nothing is
+replicated, no message carries your data, and your auth stays the only auth.
 
 ```
 write → trigger → _live_changes → tailer → SSE → useLiveQuery → your fetcher()
 ```
 
-- **Works with any TS backend** that can serve a `(Request) => Response`.
-- **Works with Drizzle out of the box** — no hooks, no codegen, no schema changes
-  beyond one outbox table.
-- **No client replica.** The browser still asks your API for data, so your auth
-  is the only auth.
+The server sends one thing: *"this query is stale."* Your loader does the rest.
 
-## Run the demo
+- **Any TS backend** that can serve `(Request) => Response` — Node, Hono, Next,
+  Bun, Deno.
+- **Any SQLite driver** shaped like `better-sqlite3` — `node:sqlite`,
+  `bun:sqlite`, `better-sqlite3`.
+- **No client replica, no codegen, no schema changes** beyond one outbox table.
 
-```bash
-pnpm install
-pnpm demo:build
-pnpm demo            # http://localhost:4477
-```
+## Where it fits
 
-Then, in another terminal, write outside the app and watch both panels update:
+|  | hum | `setInterval(refetch, 5s)` | sync engines |
+|---|---|---|---|
+| Update latency | milliseconds | up to the interval | milliseconds |
+| Data over the wire | none — invalidation only | none | rows / ops |
+| Second auth surface | no | no | yes |
+| Client replica | no | no | yes |
+| Offline writes, conflicts | no | no | yes |
+| Backend | any | any | specific |
 
-```bash
-sqlite3 examples/demo/demo.db \
-  "insert into users (name, org_id) values ('from the CLI', 1)"
-```
-
-Open the page twice to see both tabs update from one write.
-
-## Group chat example
-
-`examples/chat` is the stress case: many people writing the same table, read
-receipts, and history pagination. It also ships a benchmark.
-
-```bash
-pnpm chat:build
-pnpm chat          # http://localhost:4478
-pnpm chat:bench    # 30 simulated viewers, prints latency + refetch counts
-```
-
-Open `http://localhost:4478/?as=grace` in a second window to be someone else.
-The switcher in the sidebar does the same thing.
-
-What it demonstrates:
-
-- **Message fan-out.** A post is one `INSERT`; every viewer in the room is told
-  the `messages` table changed and refetches the last 50 rows.
-- **Read receipts.** Marking a room read writes one row to `reads`, which
-  invalidates `rooms.forUser` and clears the badge — a second live query,
-  driven by a write, no extra channels.
-- **Merge-on-scroll pagination.** `useLiveQuery` replaces its data on every
-  refetch, so older pages live in component state and are merged by `id`. This
-  is the part the library does not do for you.
-
-### Measured (30 viewers, one room, one writer)
-
-```
-Phase A  one message at a time     post→all viewers  p50 ~7ms   p95 ~10ms
-Phase B  10 messages/sec           post→all viewers  p50 ~5ms   p95 ~12ms
-Phase C  500 messages, same proc   ~840 posts/s, converged in ~600ms
-Phase D  500 rows, another process 1 frame per viewer, converged in 100–250ms
-```
-
-Phase D depends on where the write lands relative to the 250ms poll, so it
-reports a range rather than a number.
-
-Two things fall out of that:
-
-- **In-process writes buy latency at the cost of coalescing.** `onWrite`
-  flushes per request, so 500 posts produce 500 frames per viewer — but the
-  client's in-flight dedupe cut 15,000 potential refetches down to ~770.
-- **Out-of-process writes coalesce for free.** The same 500 rows written by
-  another connection arrive as **one** frame, because the 250ms poll folds the
-  whole burst. Convergence is bounded by the poll interval.
-
-So chat at human pace is single-digit milliseconds; chat at machine pace is
-bounded by refetches, not by the SSE layer.
+It is not a sync engine. It is the honest version of polling: the database
+tells the browser *when* to refetch, instead of the browser asking forever.
 
 ## Quick start
 
-### 1. Install the capture layer
+> Not on npm yet. This repo is the source of truth; the packages are
+> `@hum/core`, `@hum/server`, `@hum/react` in a pnpm workspace.
 
-Call this once at boot and after migrations. It creates `_live_changes` and one
-trigger per table per operation. Idempotent.
+### 1. Capture
+
+Call once at boot and after migrations. Idempotent, and a no-op when the
+trigger DDL already matches.
 
 ```ts
 import { DatabaseSync } from "node:sqlite";
@@ -102,10 +55,10 @@ const drift = checkTriggers(db);
 if (drift.missing.length) console.warn("missing triggers", drift.missing);
 ```
 
-`better-sqlite3` and `bun:sqlite` satisfy the same `LiveDb` interface, so swap
-the constructor and everything else is unchanged.
+### 2. Register what clients may subscribe to
 
-### 2. Register the queries clients may subscribe to
+Clients send a `name` and `params`. Never SQL. A query is a name, an optional
+param parser, and the tables it reads.
 
 ```ts
 import { LiveHub, TicketStore, createLiveHandler } from "@hum/server";
@@ -120,8 +73,7 @@ const queries = {
       if (!Number.isInteger(orgId)) throw new Error("org_id");
       return { org_id: orgId };
     },
-    // The tables this query reads. A write to any of them invalidates it.
-    tables: ["users"],
+    tables: ["users"],          // a write to `users` invalidates this query
     authorize: (ctx) => ctx.userId != null,
   },
 };
@@ -129,8 +81,7 @@ const queries = {
 const hub = new LiveHub({
   db,
   queries,
-  // Put identity in the subscription key. Required for shared multi-tenant DBs.
-  scope: (ctx) => ctx.orgId,
+  scope: (ctx) => ctx.orgId,    // tenant bucket for subscription dedupe
   identity: (ctx) => ctx.userId,
 });
 hub.start();
@@ -148,7 +99,7 @@ export const live = createLiveHandler(hub, tickets, {
 
 ### 3. Mount it
 
-**Node HTTP / Express** (Express `req`/`res` are compatible):
+**Node / Express** (Express `req`/`res` are compatible):
 
 ```ts
 import { toNodeHandler } from "@hum/server";
@@ -168,7 +119,7 @@ export const GET = (request: Request) => live(request);
 export const POST = (request: Request) => live(request);
 ```
 
-**Bun / Deno** — call `live(request)` directly from the fetch handler.
+**Bun / Deno** — call `live(request)` from the fetch handler.
 
 ### 4. React
 
@@ -194,14 +145,13 @@ function Users({ orgId }: { orgId: number }) {
 }
 ```
 
-Components that pass the same `name` + `params` share one subscription and one
+Components with the same `name` + `params` share one subscription and one
 in-flight fetch. Unmounting the last one unsubscribes.
 
 ## Write path
 
-The outbox is polled, not pushed: `pollMs` defaults to 250ms, which covers
-writes made by *other* processes (a CLI, a migration, a cron job). For writes
-that go through the same process, tell the hub instead of waiting:
+The outbox is polled at 250ms, which covers writes from *other* processes — a
+CLI, a migration, a cron job. Writes in the same process can skip the wait:
 
 ```ts
 const hub = new LiveHub({ db, queries });
@@ -214,34 +164,14 @@ const live = onWrite(db, () => hub.flush());
 live.prepare("insert into users (name, org_id) values (?, ?)").run(name, orgId);
 ```
 
-In-process latency is then whatever your own query costs — typically under a
-millisecond, not 250ms. Forgetting to flush is not a correctness bug, only a
-latency one: the poll still finds the change.
-
-## Drizzle
-
-Drizzle emits plain SQL, so capture needs no integration and there is no
-adapter to install. Declare the tables your query reads:
-
-```ts
-const queries = {
-  "users.byOrg": {
-    params: (raw) => ({ org_id: Number(raw.org_id) }),
-    tables: ["users"],
-  },
-};
-```
-
-The params become part of the subscription key; the SQL stays in your route.
-
-> **After every `drizzle-kit push`:** tables are recreated, which drops their
-> triggers. Call `syncLive({ db })` at boot (or in a `predev`/`predeploy`
-> script) and optionally assert `checkTriggers(db).missing` is empty.
+In-process latency becomes whatever your query costs — typically a few
+milliseconds end to end, not 250ms. Forgetting to flush is a latency bug, not a
+correctness one: the poll still finds the change.
 
 ## Query definitions
 
-A query is a name, an optional param parser, and the tables it reads. That's
-the whole shape:
+A query is a name, an optional param parser, and the tables it reads — that's
+the whole shape.
 
 ```ts
 interface QueryDef<P = any> {
@@ -251,24 +181,77 @@ interface QueryDef<P = any> {
 }
 ```
 
-```ts
-"users.all":   { tables: ["users"] },
-"messages.byRoom": {
-  params: (raw) => ({ room_id: Number(raw.room_id) }),
-  tables: ["messages", "users"],
-}
-```
-
-A write to any listed table invalidates every subscription to that query, and
-that is the only dependency mechanism — no SQL, no parser, no inference, no
-fallback. `LiveHub` throws at construction if `tables` is missing, so a broken
-registry fails at boot instead of never waking up.
-
-Use the function form when dependencies vary by request:
+A write to any listed table invalidates every subscription to that query. There
+is no SQL in the registry, no parser, and no inference: the tables are yours to
+declare, and `LiveHub` throws at construction if one is missing. Use the
+function form when dependencies vary by request:
 
 ```ts
 tables: (ctx, params) => ["messages", params.with_authors ? "users" : null].filter(Boolean)
 ```
+
+The trade-off is explicit: forget a table and that query will not wake up.
+There is nothing at runtime that can catch it — but boot fails loudly, and the
+list is three lines from the SQL it describes.
+
+## Semantics
+
+- **Invalidation, not replication.** A frame is `{ seq, ids }`. Nothing else
+  crosses the wire, so a client cannot learn rows it is not allowed to read.
+- **Whole-result refetch.** A change to `users` refetches every subscribed
+  `users` query. Simple and correct; bandwidth is the trade-off.
+- **Coalesced.** The tailer folds a burst into one batch of table names, and the
+  client's in-flight dedupe turns a burst of frames into one follow-up fetch.
+- **At-least-once, idempotent.** Duplicates are harmless; `seq` guards ordering.
+- **A dropped frame always ends in a resync.** Under backpressure the server
+  discards change frames and queues exactly one `resync` for the moment the
+  consumer catches up. A slow tab can be late, never silently stale.
+- **Truncation forces a resync.** Retention records `truncated_through`; a
+  cursor below it is told to start over instead of silently skipping.
+
+## Examples
+
+Both examples run from this repo:
+
+```bash
+pnpm install
+
+pnpm demo:build && pnpm demo      # http://localhost:4477
+pnpm chat:build && pnpm chat      # http://localhost:4478
+```
+
+`examples/demo` is the smallest end-to-end app: one table, two panels, a
+composer. Write from a terminal and watch both panels update:
+
+```bash
+sqlite3 examples/demo/demo.db \
+  "insert into users (name, org_id) values ('from the CLI', 1)"
+```
+
+`examples/chat` is the stress case — many writers, read receipts, and history
+pagination. Open `http://localhost:4478/?as=grace` in a second window to be
+someone else.
+
+It also ships a benchmark: 30 SSE viewers, one room, four phases.
+
+```bash
+pnpm chat:bench
+```
+
+```
+Phase A  one message at a time     post→all viewers  p50 ~7ms   p95 ~10ms
+Phase B  10 messages/sec           post→all viewers  p50 ~5ms   p95 ~12ms
+Phase C  500 messages, same proc   ~840 posts/s, converged in ~600ms
+Phase D  500 rows, another process 1 frame per viewer, converged in 100–250ms
+```
+
+Two things fall out of it:
+
+- **In-process writes buy latency at the cost of coalescing.** `onWrite` flushes
+  per request, so 500 posts produce 500 frames per viewer — but the client's
+  in-flight dedupe cut 15,000 potential refetches down to ~770.
+- **Out-of-process writes coalesce for free.** The same 500 rows written by
+  another connection arrive as **one** frame.
 
 ## API surface
 
@@ -276,17 +259,17 @@ tables: (ctx, params) => ["messages", params.with_authors ? "users" : null].filt
 
 | Export | Purpose |
 |---|---|
-| `syncLive({ db, include?, exclude?, capture?, outbox?, meta? })` | Create outbox + triggers. Idempotent, and a no-op when the DDL already matches. |
-| `checkTriggers(db, { include?, exclude? })` | `{ missing, orphaned }` for boot-time drift detection. Pass the same filters you gave `syncLive`. |
+| `syncLive({ db, include?, exclude?, capture?, outbox?, meta? })` | Create outbox + triggers. Idempotent. |
+| `checkTriggers(db, { include?, exclude? })` | `{ missing, orphaned }` for boot-time drift detection. |
 | `Tailer` | Cursor over `_live_changes`; emits coalesced `{ from, to, tables, count }`. |
 | `compact({ db, minCursor?, keep? })` | Prune the outbox and record `truncated_through`. |
-| `onWrite(db, notify)` | Proxy that calls `notify` after `run()`/`exec()`. Pair with `hub.flush()`. |
+| `onWrite(db, notify)` | Proxy that calls `notify` after `run()`/`exec()`. |
 | `currentSeq(db)`, `stableStringify(value)` | Small helpers. |
 
 `capture` controls what a trigger writes: `"row"` (default) stores the primary
 key of each affected row, `"table"` stores `NULL`. Invalidation is table-level
-either way, so `"table"` is strictly cheaper on bulk writes and correct for the
-delivered pipeline; `"row"` keeps the data needed for future row patches.
+either way, so `"table"` is cheaper on bulk writes; `"row"` keeps data for
+future row patches.
 
 ### `@hum/server`
 
@@ -294,8 +277,8 @@ delivered pipeline; `"row"` keeps the data needed for future row patches.
 |---|---|
 | `LiveHub({ db, queries, scope?, identity?, pollMs?, keep?, connectionTtlMs? })` | Registry, fan-out, tailer, retention. |
 | `createLiveHandler(hub, tickets, { authenticate, origin?, bodyLimit? })` | `(Request) => Response` router. |
-| `toNodeHandler(handler)` | Node/Express adapter. |
-| `TicketStore`, `TicketStoreLike` | Single-use stream tickets (30s default). Implement the interface to share them across processes. |
+| `toNodeHandler(handler)` | Node / Express adapter. |
+| `TicketStore`, `TicketStoreLike` | Single-use stream tickets (30s). Implement the interface to share them. |
 
 ### `@hum/react`
 
@@ -304,38 +287,30 @@ delivered pipeline; `"row"` keeps the data needed for future row patches.
 | `LiveClient({ basePath?, fetch?, EventSource?, retry? })` | One SSE connection per tab, refcounted subscriptions. |
 | `useLiveQuery({ client, name, params, fetcher })` | `{ data, error, loading, seq, updatedAt, refetch }`. |
 
-## Semantics and costs
+## Limitations
 
-- **Invalidation, not replication.** The message is `{ seq, ids }`. Nothing else
-  crosses the wire, so a client cannot learn rows it is not allowed to read.
-- **Whole-result refetch.** A change to `users` refetches every subscribed
-  `users` query. Simple and correct; bandwidth is the trade-off. Coalescing
-  means a 500-row import produces one message, not 500.
-- **Coalesced per commit.** The tailer folds a burst into one batch of table
-  names.
-- **At-least-once, idempotent.** Duplicates are harmless; `seq` guards ordering.
-- **A dropped frame always ends in a resync.** Under backpressure the server
-  discards change frames — they carry no data — and queues exactly one `resync`
-  for the moment the consumer catches up. The pending resync survives a quiet
-  stream (it is flushed from `pull()`, the next send, or the heartbeat), so a
-  slow tab can be late but never silently stale.
+- **Table granularity.** A change to any row of `users` refetches every
+  subscribed `users` query. Precision is deliberately unsolved; row patches are
+  future work.
+- **One process per database** for `/live` (see Deployment).
+- **No payloads.** No presence, typing indicators, or optimistic echoes. Add a
+  WebSocket beside it if you need those.
+- **Not serverless.** SSE needs a long-lived connection; there is no polling
+  adapter for D1 or Lambda.
+- **SQLite's single writer.** Concurrent writes serialize at the database, so
+  set `busy_timeout` on every connection that writes.
 
 ## Deployment
 
 `/live` must be served by **one process per database** — or by replicas that
 share state. The outbox is cross-process by design, so any number of processes
 can *write*; what is not shared is the connection registry and `TicketStore`.
-A ticket minted by process A cannot be redeemed by process B, and fan-out only
-reaches connections held by the process that tails the row.
 
-If you must run more than one instance, either pin `/live` to a single instance
+If you must run more than one instance, either pin `/live` to one instance
 (shuffle sharding, sticky routes, a single live service) or supply a
 `TicketStoreLike` backed by shared storage *and* a cross-process transport for
 fan-out. Sticky sessions alone are not enough: the tailer that sees a write has
 to reach every connection.
-
-Connections are per-tab and in-memory. `connectionTtlMs` (30s) reaps ones that
-were created and never opened a stream.
 
 ## Security checklist
 
@@ -343,11 +318,10 @@ were created and never opened a stream.
 - [ ] Identity is in `scope` if one SQLite file holds multiple tenants.
 - [ ] Every query either scopes by `ctx` or has an `authorize` check.
 - [ ] `origin` is set for cookie-authenticated deployments.
-- [ ] `hub.disconnect(connId)` is wired into logout and role changes. `ctx` is
-      captured at connect time, so a stream outlives a revoked session until you
-      close it.
-- [ ] Prefer one database file per tenant. Then a scoping bug is a physical
-      boundary, not a query bug.
+- [ ] `hub.disconnect(connId)` is wired into logout and role changes — `ctx` is
+      captured at connect time, so a stream outlives a revoked session.
+- [ ] Prefer one database file per tenant: a scoping bug becomes a physical
+      boundary instead of a query bug.
 
 ## Project layout
 
@@ -355,8 +329,9 @@ were created and never opened a stream.
 packages/core     outbox, triggers, tailer, retention, write helper
 packages/server   hub, subscriptions, SSE, tickets, node adapter
 packages/react    LiveClient + useLiveQuery
-examples/demo     runnable end-to-end app
+examples/demo     smallest end-to-end app
 examples/chat     group chat + benchmark
+SPEC.md           invariants and the design of the pipeline
 ```
 
 ## Development
@@ -370,5 +345,11 @@ pnpm chat:bench
 ```
 
 All tests run against real SQLite files in WAL mode. `chaos.test.ts` drives
-concurrent writers, aggressive truncation and reconnects, then asserts no
-subscriber was left behind. See `SPEC.md` for the invariants.
+concurrent writers, aggressive truncation and a mid-stream reconnect, then
+asserts no subscriber was left behind.
+
+Requires Node 24+ (`node:sqlite` and built-in type stripping).
+
+## License
+
+MIT
